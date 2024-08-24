@@ -188,16 +188,24 @@ class TbroSubscriber(Node):
     def process_data(self):
         self.get_logger().debug("Processing frames")
 
-        # Get displasment and rotation form ML model
+        """ Get displacement (delta) and rotation form ML model. This delta is between previous heatmap and current heatmap """
         with torch.no_grad():
             pose_delta = self.model.forward(
                 [self.data_set.__getitem__(0)[0], self.data_set.__getitem__(1)[0]]
             )
 
-        # print(f'[{float(pose_delta[0][0])}, {float(pose_delta[0][1])}, {float(pose_delta[0][2])}, {float(pose_delta[0][3])}, {float(pose_delta[0][4])}, {float(pose_delta[0][5])}]')
+        """ Print displacement (delta) from previous heat map to current heat map """
+        print(
+            "pose_delta: \n",
+            f"[{float(pose_delta[0][0])}, {float(pose_delta[0][1])}, {float(pose_delta[0][2])}, {float(pose_delta[0][3])}, {float(pose_delta[0][4])}, {float(pose_delta[0][5])}]",
+        )
 
-        """ IS THIS CORRECT???"""
-        # Add delta pose to current pose
+        """ Save translation point to create homogeneous transform matrix later """
+        """ Get translation section of the pose as a list"""
+        translation = self.pose[:3]
+
+        """ Accumulate delta to determine current pose in robot frame """
+        """ SHOULD I ACCUMULATE THE DELTA???? """
         self.pose[0] += float(pose_delta[0][0])
         self.pose[1] += float(pose_delta[0][1])
         self.pose[2] += float(pose_delta[0][2])
@@ -205,39 +213,47 @@ class TbroSubscriber(Node):
         self.pose[4] += float(pose_delta[0][4])
         self.pose[5] += float(pose_delta[0][5])
 
-        # convert pose to 4x1 metrix
-        position_body = self.pose[:3]
-        print("position_body: ", position_body)
-        pose_body_frame = np.asmatrix(np.append(position_body, [1.0])).transpose()
-        print("pose_body_frame: ", pose_body_frame)
+        """ Get point (xyz) section of the pose in robot frame as list"""
+        point_body = self.pose[:3]
+        print("point_body: \n", point_body)
 
-        # Generate 4x4 homogeneous transformation metrix
-        trasformation = self.pose[:3]
-        rotation = quaternion_from_euler(
-            float(self.pose[3]), float(self.pose[4]), float(self.pose[5])
+        """ Add 1 at the end of the list and convert it to 4x1 matrix """
+        point_body = np.asmatrix(np.append(point_body, [1.0])).transpose()
+        print("point_body: \n", point_body)
+
+        """ Convert rotation from euler to quaternion """
+        rotation_q = np.asarray(
+            quaternion_from_euler(self.pose[3], self.pose[4], self.pose[5])
         )
-        rotation = np.asarray(rotation)
-        ht_matrix = self.homogeneous_transform(trasformation, rotation)
-        print("ht_matrix = ", ht_matrix)
 
-        # apply transfoirmation
-        pose_world = ht_matrix * pose_body_frame
-        print("pose_world = ", pose_world)
+        """ Generate 4x4 homogeneous transformation matrix """
+        ht_matrix = self.homogeneous_transform(translation, rotation_q)
+        print("ht_matrix: \n", ht_matrix)
 
-        # Build odometry message
+        """ Apply transformation to the point in robot frame to transform into world frame """
+        point_world = ht_matrix * point_body
+        print("point_world: \n", point_world)
+
+        """ 
+        At this point position and orientation should be ready to publish in world frame.
+        position: point_world (4x1 matrix)
+        orientation: rotation_q (list of 4 elements in quaternion)
+        """
+
+        """ Build odometry message and publish """
         odom_msg = Odometry()
         odom_msg.header.stamp = self.get_clock().now().to_msg()
         odom_msg.header.frame_id = "world"
         odom_msg.child_frame_id = "tbro_enu"
-        odom_msg.pose.pose.position.x = float(pose_world[0][0])
-        odom_msg.pose.pose.position.y = float(pose_world[1][0])
-        odom_msg.pose.pose.position.z = float(pose_world[2][0])
-        odom_msg.pose.pose.orientation.x = rotation[0]
-        odom_msg.pose.pose.orientation.y = rotation[1]
-        odom_msg.pose.pose.orientation.z = rotation[2]
-        odom_msg.pose.pose.orientation.w = rotation[3]
+        odom_msg.pose.pose.position.x = float(point_world[0][0])
+        odom_msg.pose.pose.position.y = float(point_world[1][0])
+        odom_msg.pose.pose.position.z = float(point_world[2][0])
+        odom_msg.pose.pose.orientation.x = rotation_q[0]
+        odom_msg.pose.pose.orientation.y = rotation_q[1]
+        odom_msg.pose.pose.orientation.z = rotation_q[2]
+        odom_msg.pose.pose.orientation.w = rotation_q[3]
 
-        print("Publishing pose: ", odom_msg.pose.pose)
+        print("Publishing pose: \n", odom_msg.pose.pose)
         self.odometry_publisher.publish(odom_msg)
 
     def run_once(self):
