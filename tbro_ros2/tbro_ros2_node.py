@@ -1,7 +1,3 @@
-"""
-Transformer Based Radar Odometry ROS node
-"""
-
 # generic
 import rclpy
 from rclpy.node import Node
