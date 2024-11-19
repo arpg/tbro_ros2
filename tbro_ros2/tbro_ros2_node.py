@@ -5,6 +5,7 @@ Transformer Based Radar Odometry ROS node
 # generic
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
 import math
 import numpy as np
 from tf_transformations import quaternion_from_euler
@@ -26,7 +27,13 @@ from .mimo_dataset import MimoDataset
 
 # local
 # from .models.deep_ro_enc_only import DeepROEncOnly
-from .parameters import Parameters
+
+# use this params for deepro
+from .params import Parameters
+
+# use this params for tbro model
+# from .parameters import Parameters
+
 from .models.kremer_original import KramerOriginal
 
 
@@ -40,14 +47,25 @@ class TbroSubscriber(Node):
         self.data_set = MimoDataset()
         self.pose = np.zeros(6)
         self.args = Parameters()
-        self.device = torch.device("cpu")
+        if torch.backends.mps.is_available():
+            print("===== Using mps =====")
+            self.device = torch.device("mps")  # Use MPS device for GPU acceleration
+        else:
+            print("===== Using CPU =====")
+            self.device = torch.device(
+                "cpu"
+            )  # Fall back to CPU if MPS is not available
+
         # self.model = DeepROEncOnly(self.args)
         self.model = KramerOriginal(
             self.args,
-            "/home/parallels/radar/models/epoch_25_batch_16_lr_1e-05_tbro_test_batch.model",
+            # "/home/parallels/radar/models/epoch_25_batch_16_lr_1e-05_tbro_test_batch.model",
             # "/home/parallels/radar/models/motion_only_epoch_25_batch_10_lr_1e-05_tbro_test_batch.model",
             # "/home/parallels/radar/models/no_motion_epoch_10_batch_4_lr_1e-05_test_batch.model",
             # "/home/parallels/radar/models/second_motion_only_epoch_50_batch_10_lr_1e-05_tbro_test_batch.model",
+            # PYTORCH LIGHTNING
+            "/home/parallels/radar/models/pytorch_lightning/epoch_25_batch_16_lr_1e-05_tbro_test_batch_1.model",
+            # "/home/parallels/radar/models/pytorch_lightning/tbro_test_batch.model",
         )
         # self.model.run
         self.model.to(self.device)
@@ -260,6 +278,7 @@ class TbroSubscriber(Node):
         if self.init_flag:
             # TODO: This will miss the first message. Fix it.
             if len(self.msg_buffer) > 0:
+                print("")
                 self.data_set.load_img(self.msg_buffer.pop(0))
                 self.process_data()
 
@@ -269,10 +288,14 @@ def main(args=None):
     rclpy.init(args=args)
 
     tbro_subscriber = TbroSubscriber()
+    # Create a MultiThreadedExecutor with 2 threads
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(tbro_subscriber)
 
     print("Intialized tbro node")
+    executor.spin()
 
-    rclpy.spin(tbro_subscriber)
+    # rclpy.spin(tbro_subscriber)
 
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
